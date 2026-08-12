@@ -11,6 +11,7 @@
 - 日付ごとの学習履歴
 - JSONファイルによるバックアップ、復元、別端末への移行
 - PWAとしてのインストールとオフライン利用
+- CapacitorによるiOSアプリ版
 
 問題、回答履歴、設定はブラウザのIndexedDBへ保存されます。サーバーDBやログイン機能は使用していません。
 
@@ -29,6 +30,14 @@ npm install
 npm run dev
 ```
 
+## iOS用ファイルの同期
+
+```bash
+npm run ios:sync
+```
+
+このコマンドでiOS用Web資材をビルドし、`ios`プロジェクトへ同期します。App Store向けの署名・実機テスト・提出にはMacとXcodeが必要です。詳細は[iOSリリース手順](docs/05_iOSリリース手順.md)を参照してください。
+
 ## 品質確認
 
 ```bash
@@ -44,3 +53,4 @@ npx tsc --noEmit
 - [FE設計書](docs/02_FE設計書.md)
 - [BE・データ設計書](docs/03_BE設計書.md)
 - [テスト設計書](docs/04_テスト設計書.md)
+- [iOSリリース手順](docs/05_iOSリリース手順.md)
