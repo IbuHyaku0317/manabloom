@@ -13,6 +13,29 @@ const answerLabels: Record<AnswerType, string> = { text: "フリー入力", lett
 
 const shuffle = <T,>(items: T[]) => [...items].sort(() => Math.random() - 0.5);
 
+function questionTextSize(prompt: string) {
+  const characterCount = [...prompt.replace(/\s/g, "")].length;
+  const lineBreakWeight = Math.max(0, prompt.split("\n").length - 1) * 20;
+  const length = characterCount + lineBreakWeight;
+  if (length > 180) return "question-text-xlong";
+  if (length > 100) return "question-text-long";
+  if (length > 50) return "question-text-medium";
+  return "question-text-short";
+}
+
+function truncateQuestionPrompt(prompt: string, maxFullWidthCharacters = 20) {
+  const characters = [...prompt];
+  let width = 0;
+  let end = 0;
+  for (const character of characters) {
+    const characterWidth = /^[\u0020-\u007e\uff61-\uff9f]$/.test(character) ? 0.5 : 1;
+    if (width + characterWidth > maxFullWidthCharacters) break;
+    width += characterWidth;
+    end += 1;
+  }
+  return end < characters.length ? `${characters.slice(0, end).join("")}...` : prompt;
+}
+
 function makeLetterChoices(answer: string, index: number) {
   const right = answer[index];
   const hiragana = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんがぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽぁぃぅぇぉゃゅょっ";
@@ -93,6 +116,10 @@ export default function QuizApp() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    document.querySelector<HTMLElement>(".app-content")?.scrollTo(0, 0);
+  }, [quizIndex, screen, tab]);
+
   const submitAnswer = useCallback(async (forcedAnswer?: string) => {
     if (feedback) return;
     const question = quizQuestions[quizIndex];
@@ -155,7 +182,11 @@ export default function QuizApp() {
     return map;
   }, [attempts]);
 
-  const showMain = (nextTab: Tab = tab) => { setTab(nextTab); setScreen("main"); };
+  const showMain = (nextTab: Tab = tab) => {
+    if (nextTab === "library") setSelectedCategory("all");
+    setTab(nextTab);
+    setScreen("main");
+  };
 
   async function addCategory(name: string) {
     const clean = name.trim();
@@ -199,7 +230,6 @@ export default function QuizApp() {
     setScreen("question-form");
   }
 
-  const filteredQuestions = selectedCategory === "all" ? questions : questions.filter((q) => q.categoryId === selectedCategory);
   const categoryName = (id: string) => categories.find((category) => category.id === id)?.name ?? "未分類";
 
   return (
@@ -211,12 +241,13 @@ export default function QuizApp() {
         <span className="offline-pill"><i /> この端末に保存</span>
       </header>
 
+      <div className="app-content">
       {screen === "main" && tab === "home" && (
         <Home questions={questions} attempts={attempts} sessions={sessions}
           onStudy={() => setScreen("study-setup")} onCreate={() => openQuestionForm()} onList={() => showMain("library")} />
       )}
       {screen === "main" && tab === "library" && (
-        <Library categories={categories} questions={filteredQuestions} selectedCategory={selectedCategory}
+        <Library categories={categories} questions={questions} selectedCategory={selectedCategory}
           onSelectCategory={setSelectedCategory} categoryName={categoryName} statsByQuestion={statsByQuestion}
           onAddCategory={addCategory} onDeleteCategory={deleteCategory} onCreate={() => openQuestionForm()}
           onEdit={openQuestionForm} onDelete={deleteQuestion} />
@@ -237,6 +268,7 @@ export default function QuizApp() {
           feedback={feedback} feedbackSaved={feedbackSaved} onAnswer={setCurrentAnswer} onLetter={setLetterAnswer} onSubmit={(forcedAnswer) => void submitAnswer(forcedAnswer)} onContinue={() => void continueQuiz()} onQuit={() => { if (window.confirm("学習を終了しますか？")) showMain("home"); }} />
       )}
       {screen === "result" && <Result answers={quizAnswers} onHome={() => showMain("home")} onRetry={() => setScreen("study-setup")} />}
+      </div>
 
       {screen === "main" && (
         <nav className="bottom-nav" aria-label="メインメニュー">
@@ -273,6 +305,10 @@ function Home({ questions, attempts, sessions, onStudy, onCreate, onList }: {
       <article className="stat-card"><small>前回の正答率</small><strong>{latest ? Math.round(latest.correct / latest.total * 100) : 0}<i>%</i></strong><span>{latest ? `${latest.correct} / ${latest.total}問 正解` : "まだ記録がありません"}</span></article>
       <article className="stat-card accent"><small>登録した問題</small><strong>{questions.length}<i>問</i></strong><span>端末内に保存中</span></article>
     </div>
+    <aside className="reward-card" aria-label="楽天アフィリエイト広告">
+      <div className="reward-copy"><small>広告・PR</small><h2>がんばった自分に、ご褒美はいかがですか？</h2><p>こちらのリンクを経由して購入いただくと、開発者に報酬が入り、ManaBloomを育てる励みになります。</p></div>
+      <a href="https://hb.afl.rakuten.co.jp/hsc/568d73c9.aab63da7.564bf542.832cabdd/?link_type=pict&ut=eyJwYWdlIjoic2hvcCIsInR5cGUiOiJwaWN0IiwiY29sIjoxLCJjYXQiOiIxMTMiLCJiYW4iOjEyNTE4MjAsImFtcCI6ZmFsc2V9" target="_blank" rel="nofollow sponsored noopener noreferrer"><img src="https://hbb.afl.rakuten.co.jp/hsb/568d73c9.aab63da7.564bf542.832cabdd/?me_id=1&me_adv_id=1251820&t=pict" alt="楽天市場の商品を見る" /></a>
+    </aside>
   </section>;
 }
 
@@ -283,13 +319,14 @@ function Library({ categories, questions, selectedCategory, onSelectCategory, ca
   onEdit: (q: Question) => void; onDelete: (q: Question) => void;
 }) {
   const [adding, setAdding] = useState(false); const [name, setName] = useState("");
+  const visibleQuestions = selectedCategory === "all" ? questions : questions.filter((question) => question.categoryId === selectedCategory);
   return <section className="page"><div className="page-title"><div><p className="eyebrow">MY QUESTIONS</p><h1>問題ライブラリ</h1><p>カテゴリで整理して、いつでも学習できます。</p></div><button className="button primary-button" onClick={onCreate}>＋ 問題をつくる</button></div>
     <div className="category-strip"><button className={selectedCategory === "all" ? "category-chip active" : "category-chip"} onClick={() => onSelectCategory("all")}><i style={{ background: "#333" }} />すべて</button>
       {categories.map((category) => <div className="category-wrap" key={category.id}><button className={selectedCategory === category.id ? "category-chip active" : "category-chip"} onClick={() => onSelectCategory(category.id)}><i style={{ background: category.color }} />{category.name}</button><button className="chip-delete" aria-label={`${category.name}を削除`} onClick={() => onDeleteCategory(category)}>×</button></div>)}
       {adding ? <form className="category-add" onSubmit={(e) => { e.preventDefault(); onAddCategory(name); setName(""); setAdding(false); }}><input value={name} onChange={(e) => setName(e.target.value)} placeholder="カテゴリ名" aria-label="新しいカテゴリ名" /><button>追加</button></form> : <button className="category-chip add" onClick={() => setAdding(true)}>＋ カテゴリ</button>}
     </div>
-    {questions.length === 0 ? <div className="empty-state"><span>✎</span><h2>まだ問題がありません</h2><p>覚えたいことを、最初の問題にしてみましょう。</p><button className="button primary-button" onClick={onCreate}>最初の問題をつくる</button></div> :
-      <div className="question-list">{questions.map((question) => { const stat = statsByQuestion.get(question.id); return <article className="question-row" key={question.id}><div className="answer-type">{question.answerType === "boolean" ? "○×" : question.answerType === "letters" ? "4択" : question.answerType === "multiple-choice" ? `${question.choices?.length ?? 0}択` : "入力"}</div><div className="question-copy"><div><span>{categoryName(question.categoryId)}</span><small>{answerLabels[question.answerType]}</small></div><h3>{question.prompt}</h3><p>答え：{question.displayAnswer || question.answer}{question.answerType === "letters" && question.displayAnswer !== question.answer ? `（入力：${question.answer}）` : ""}</p></div><div className="question-stat">{stat ? <><strong>{Math.round(stat.correct / stat.total * 100)}%</strong><small>{stat.total}回答</small></> : <small>未回答</small>}</div><div className="row-actions"><button onClick={() => onEdit(question)}>編集</button><button className="danger-link" onClick={() => onDelete(question)}>削除</button></div></article>; })}</div>}
+    {visibleQuestions.length === 0 ? <div className="empty-state"><span>✎</span><h2>まだ問題がありません</h2><p>覚えたいことを、最初の問題にしてみましょう。</p><button className="button primary-button" onClick={onCreate}>最初の問題をつくる</button></div> :
+      <div className="question-list">{visibleQuestions.map((question) => { const stat = statsByQuestion.get(question.id); return <article className="question-row" key={question.id}><div className="answer-type">{question.answerType === "boolean" ? "○×" : question.answerType === "letters" ? "4択" : question.answerType === "multiple-choice" ? `${question.choices?.length ?? 0}択` : "入力"}</div><div className="question-copy"><div><span>{categoryName(question.categoryId)}</span><small>{answerLabels[question.answerType]}</small></div><h3 title={question.prompt}>{truncateQuestionPrompt(question.prompt)}</h3><p>答え：{question.displayAnswer || question.answer}{question.answerType === "letters" && question.displayAnswer !== question.answer ? `（入力：${question.answer}）` : ""}</p></div><div className="question-stat">{stat ? <><strong>{Math.round(stat.correct / stat.total * 100)}%</strong><small>{stat.total}回答</small></> : <small>未回答</small>}</div><div className="row-actions"><button onClick={() => onEdit(question)}>編集</button><button className="danger-link" onClick={() => onDelete(question)}>削除</button></div></article>; })}</div>}
   </section>;
 }
 
@@ -314,7 +351,7 @@ function QuestionForm({ categories, question, onCancel, onSaved }: { categories:
 }
 
 function StudySetup({ questions, categories, attempts, timeLimitOptions, onUpdateTimeLimits, onCancel, onStart }: { questions: Question[]; categories: Category[]; attempts: Attempt[]; timeLimitOptions: number[]; onUpdateTimeLimits: (options: number[]) => void; onCancel: () => void; onStart: (q: Question[], seconds: number) => void }) {
-  const [categoryId, setCategoryId] = useState("all"); const [count, setCount] = useState(1); const [limit, setLimit] = useState(0); const [filter, setFilter] = useState<Filter>("all"); const [newLimit, setNewLimit] = useState("");
+  const [categoryId, setCategoryId] = useState("all"); const [count, setCount] = useState(Math.max(1, questions.length)); const [limit, setLimit] = useState(0); const [filter, setFilter] = useState<Filter>("all"); const [newLimit, setNewLimit] = useState("");
   const available = useMemo(() => questions.filter((q) => categoryId === "all" || q.categoryId === categoryId).filter((q) => {
     const own = attempts.filter((a) => a.questionId === q.id); const last = own[0];
     if (filter === "last-wrong") return !!last && !last.correct;
@@ -324,8 +361,8 @@ function StudySetup({ questions, categories, attempts, timeLimitOptions, onUpdat
     return true;
   }), [attempts, categoryId, filter, questions]);
   return <section className="page setup-page"><button className="back-link" onClick={onCancel}>← ホームに戻る</button><div className="form-heading"><p className="eyebrow">STUDY SETUP</p><h1>どんなふうに解きますか？</h1><p>今日の気分に合わせて、出題内容を選びましょう。</p></div>
-    <div className="setup-card"><label>カテゴリ<select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}><option value="all">すべてのカテゴリ</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-      <fieldset><legend>出題範囲</legend><div className="segmented">{([['all','すべて'],['last-wrong','前回不正解'],['ever-wrong','不正解あり'],['unanswered','未回答'],['weak','苦手']] as [Filter,string][]).map(([value, label]) => <button type="button" key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{label}</button>)}</div></fieldset>
+    <div className="setup-card"><label>カテゴリ<select value={categoryId} onChange={(e) => { setCategoryId(e.target.value); setCount(Math.max(1, questions.filter((question) => e.target.value === "all" || question.categoryId === e.target.value).length)); }}><option value="all">すべてのカテゴリ</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+      <fieldset><legend>出題範囲</legend><div className="segmented">{([['all','すべて'],['last-wrong','前回不正解'],['ever-wrong','不正解あり'],['unanswered','未回答'],['weak','苦手']] as [Filter,string][]).map(([value, label]) => <button type="button" key={value} className={filter === value ? "active" : ""} onClick={() => { setFilter(value); setCount(Math.max(1, questions.filter((question) => categoryId === "all" || question.categoryId === categoryId).filter((question) => { const own = attempts.filter((attempt) => attempt.questionId === question.id); const last = own[0]; if (value === "last-wrong") return !!last && !last.correct; if (value === "ever-wrong") return own.some((attempt) => !attempt.correct); if (value === "unanswered") return own.length === 0; if (value === "weak") return own.length > 0 && own.filter((attempt) => attempt.correct).length / own.length < .6; return true; }).length)); }}>{label}</button>)}</div></fieldset>
       <fieldset><legend>出題数 <b className="range-value">{available.length ? Math.min(count, available.length) : 0}問</b></legend><div className="range-control"><input aria-label="出題数" type="range" min="1" max={Math.max(1, available.length)} value={Math.min(count, Math.max(1, available.length))} disabled={!available.length} onChange={(e) => setCount(Number(e.target.value))} /><div><span>1問</span><span>全{available.length}問</span></div></div></fieldset>
       <fieldset><legend>1問の制限時間</legend>{limit === 0 && <p className="field-help">選択されていないため、制限時間なしです。</p>}<div className="time-limit-manager">{timeLimitOptions.map((seconds) => <div className={limit === seconds ? "time-limit-option active" : "time-limit-option"} key={seconds}><button type="button" onClick={() => setLimit(limit === seconds ? 0 : seconds)}>{seconds}秒</button><button type="button" className="remove-time" aria-label={`${seconds}秒を削除`} onClick={() => { if (limit === seconds) setLimit(0); onUpdateTimeLimits(timeLimitOptions.filter((value) => value !== seconds)); }}>×</button></div>)}</div><form className="add-time-form" onSubmit={(event) => { event.preventDefault(); const seconds = Number(newLimit); if (!Number.isInteger(seconds) || seconds < 1 || seconds > 3600 || timeLimitOptions.includes(seconds)) return; onUpdateTimeLimits([...timeLimitOptions, seconds]); setLimit(seconds); setNewLimit(""); }}><label>時間を追加<input type="number" min="1" max="3600" step="1" value={newLimit} onChange={(event) => setNewLimit(event.target.value)} placeholder="例：45" /><span>秒</span></label><button type="submit" disabled={!newLimit || timeLimitOptions.includes(Number(newLimit))}>＋ 追加</button></form><small className="field-help">1〜3600秒で追加できます。</small></fieldset>
       <div className="setup-summary"><span>{available.length ? Math.min(count, available.length) : 0}</span><p>問を出題します<br /><small>条件に合う全{available.length}問からランダムです</small></p><button className="button primary-button" disabled={!available.length} onClick={() => onStart(shuffle(available).slice(0, count), limit)}>学習を始める →</button></div>
@@ -336,7 +373,7 @@ function Quiz({ question, index, total, answer, letterAnswer, remaining, timeLim
   const choices = useMemo(() => makeLetterChoices(question.answer, letterAnswer.length), [letterAnswer.length, question.answer]);
   const complete = answer.trim().length > 0;
   return <section className="quiz-page"><div className="quiz-top"><button onClick={onQuit}>× 終了</button><span>{category}</span><strong>{index + 1}<small> / {total}</small></strong></div><div className="progress"><i style={{ width: `${(index + 1) / total * 100}%` }} /></div>
-    <div className="quiz-content"><div className="quiz-meta"><span>QUESTION {String(index + 1).padStart(2,"0")}</span>{timeLimit > 0 && !feedback && <b className={remaining <= 5 ? "urgent" : ""}>◷ {remaining}秒</b>}</div><h1>{question.prompt}</h1>
+    <div className="quiz-content"><div className="quiz-meta"><span>QUESTION {String(index + 1).padStart(2,"0")}</span>{timeLimit > 0 && !feedback && <b className={remaining <= 5 ? "urgent" : ""}>◷ {remaining}秒</b>}</div><h1 className={questionTextSize(question.prompt)}>{question.prompt}</h1>
       {feedback ? <div className={feedback.correct ? "instant-feedback correct-feedback" : "instant-feedback wrong-feedback"} role="status" aria-live="assertive"><span className="feedback-mark">{feedback.correct ? "✓" : "×"}</span><h2>{feedback.correct ? "正解です！" : "不正解です"}</h2>{!feedback.correct && <p>あなたの回答：<b>{feedback.answer || "未回答"}</b></p>}<div className="correct-answer"><small>正解</small><strong>{question.displayAnswer || question.answer}</strong>{question.answerType === "letters" && question.displayAnswer !== question.answer && <span>入力する答え：{question.answer}</span>}</div><button className="button primary-button" disabled={!feedbackSaved} onClick={onContinue}>{index + 1 >= total ? "結果を見る" : "次の問題へ"} →</button></div> : <>
         {question.answerType === "text" && <div className="answer-area"><label>答えを入力<input value={answer} onChange={(e) => onAnswer(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && answer.trim()) onSubmit(); }} placeholder="ここに答えを入力" /></label></div>}
         {question.answerType === "boolean" && <div className="boolean-answer"><button className={answer === "○" ? "active" : ""} onClick={() => onAnswer("○")}>○<span>正しい</span></button><button className={answer === "×" ? "active" : ""} onClick={() => onAnswer("×")}>×<span>間違い</span></button></div>}
