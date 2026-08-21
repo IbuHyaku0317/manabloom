@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { createBackup, db, initializeDatabase, parseBackup, restoreBackup, type AnswerType, type Attempt, type Category, type ManaBloomBackup, type Question, type StudySession } from "./db";
 
 type Tab = "home" | "library" | "history" | "settings";
@@ -250,7 +250,7 @@ export default function QuizApp() {
         <Library categories={categories} questions={questions} selectedCategory={selectedCategory}
           onSelectCategory={setSelectedCategory} categoryName={categoryName} statsByQuestion={statsByQuestion}
           onAddCategory={addCategory} onDeleteCategory={deleteCategory} onCreate={() => openQuestionForm()}
-          onEdit={openQuestionForm} onDelete={deleteQuestion} />
+          onEdit={openQuestionForm} onDelete={deleteQuestion} onBulkChanged={async (message) => { await refresh(); setToast(message); }} />
       )}
       {screen === "main" && tab === "history" && <History attempts={attempts} sessions={sessions} questions={questions} onEdit={openQuestionForm} />}
       {screen === "main" && tab === "settings" && <Settings onRestored={async () => { await refresh(); setToast("バックアップを復元しました"); }} />}
@@ -313,21 +313,41 @@ function Home({ questions, attempts, sessions, onStudy, onCreate, onList }: {
   </section>;
 }
 
-function Library({ categories, questions, selectedCategory, onSelectCategory, categoryName, statsByQuestion, onAddCategory, onDeleteCategory, onCreate, onEdit, onDelete }: {
+function Library({ categories, questions, selectedCategory, onSelectCategory, categoryName, statsByQuestion, onAddCategory, onDeleteCategory, onCreate, onEdit, onDelete, onBulkChanged }: {
   categories: Category[]; questions: Question[]; selectedCategory: string; onSelectCategory: (id: string) => void;
   categoryName: (id: string) => string; statsByQuestion: Map<string, { total: number; correct: number; last?: Attempt }>;
   onAddCategory: (name: string) => void; onDeleteCategory: (category: Category) => void; onCreate: () => void;
-  onEdit: (q: Question) => void; onDelete: (q: Question) => void;
+  onEdit: (q: Question) => void; onDelete: (q: Question) => void; onBulkChanged: (message: string) => Promise<void>;
 }) {
   const [adding, setAdding] = useState(false); const [name, setName] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]); const [changingCategory, setChangingCategory] = useState(false); const [bulkCategoryId, setBulkCategoryId] = useState("uncategorized");
   const visibleQuestions = selectedCategory === "all" ? questions : questions.filter((question) => question.categoryId === selectedCategory);
-  return <section className="page"><div className="page-title"><div><p className="eyebrow">MY QUESTIONS</p><h1>問題ライブラリ</h1><p>カテゴリで整理して、いつでも学習できます。</p></div><button className="button primary-button" onClick={onCreate}>＋ 問題をつくる</button></div>
-    <div className="category-strip"><button className={selectedCategory === "all" ? "category-chip active" : "category-chip"} onClick={() => onSelectCategory("all")}><i style={{ background: "#333" }} />すべて</button>
-      {categories.map((category) => <div className="category-wrap" key={category.id}><button className={selectedCategory === category.id ? "category-chip active" : "category-chip"} onClick={() => onSelectCategory(category.id)}><i style={{ background: category.color }} />{category.name}</button><button className="chip-delete" aria-label={`${category.name}を削除`} onClick={() => onDeleteCategory(category)}>×</button></div>)}
+  function selectCategory(id: string) { setSelectedIds([]); setChangingCategory(false); onSelectCategory(id); }
+  function toggleQuestion(id: string) { setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); }
+  async function changeSelectedCategory() {
+    const selectedQuestions = questions.filter((question) => selectedIds.includes(question.id));
+    if (!selectedQuestions.length) return;
+    const now = new Date().toISOString();
+    await db.questions.bulkPut(selectedQuestions.map((question) => ({ ...question, categoryId: bulkCategoryId, updatedAt: now })));
+    setSelectedIds([]); setChangingCategory(false); await onBulkChanged(`${selectedQuestions.length}問のカテゴリを変更しました`);
+  }
+  async function deleteSelectedQuestions() {
+    if (!selectedIds.length || !window.confirm(`選択した${selectedIds.length}問を削除しますか？\nこの操作は元に戻せません。`)) return;
+    const ids = [...selectedIds];
+    await db.transaction("rw", db.questions, db.attempts, async () => {
+      await db.questions.bulkDelete(ids);
+      for (const id of ids) await db.attempts.where("questionId").equals(id).delete();
+    });
+    setSelectedIds([]); setChangingCategory(false); await onBulkChanged(`${ids.length}問を削除しました`);
+  }
+  return <section className="page"><div className="page-title library-title"><div><p className="eyebrow">MY QUESTIONS</p><h1>問題ライブラリ</h1><p>カテゴリで整理して、いつでも学習できます。</p></div><button className="button primary-button" onClick={onCreate}>＋ 新しい問題を追加</button></div>
+    <div className="category-strip"><button className={selectedCategory === "all" ? "category-chip active" : "category-chip"} onClick={() => selectCategory("all")}><i style={{ background: "#333" }} />すべて</button>
+      {categories.map((category) => <div className="category-wrap" key={category.id}><button className={selectedCategory === category.id ? "category-chip active" : "category-chip"} onClick={() => selectCategory(category.id)}><i style={{ background: category.color }} />{category.name}</button><button className="chip-delete" aria-label={`${category.name}を削除`} onClick={() => onDeleteCategory(category)}>×</button></div>)}
       {adding ? <form className="category-add" onSubmit={(e) => { e.preventDefault(); onAddCategory(name); setName(""); setAdding(false); }}><input value={name} onChange={(e) => setName(e.target.value)} placeholder="カテゴリ名" aria-label="新しいカテゴリ名" /><button>追加</button></form> : <button className="category-chip add" onClick={() => setAdding(true)}>＋ カテゴリ</button>}
     </div>
     {visibleQuestions.length === 0 ? <div className="empty-state"><span>✎</span><h2>まだ問題がありません</h2><p>覚えたいことを、最初の問題にしてみましょう。</p><button className="button primary-button" onClick={onCreate}>最初の問題をつくる</button></div> :
-      <div className="question-list">{visibleQuestions.map((question) => { const stat = statsByQuestion.get(question.id); return <article className="question-row" key={question.id}><div className="answer-type">{question.answerType === "boolean" ? "○×" : question.answerType === "letters" ? "4択" : question.answerType === "multiple-choice" ? `${question.choices?.length ?? 0}択` : "入力"}</div><div className="question-copy"><div><span>{categoryName(question.categoryId)}</span><small>{answerLabels[question.answerType]}</small></div><h3 title={question.prompt}>{truncateQuestionPrompt(question.prompt)}</h3><p>答え：{question.displayAnswer || question.answer}{question.answerType === "letters" && question.displayAnswer !== question.answer ? `（入力：${question.answer}）` : ""}</p></div><div className="question-stat">{stat ? <><strong>{Math.round(stat.correct / stat.total * 100)}%</strong><small>{stat.total}回答</small></> : <small>未回答</small>}</div><div className="row-actions"><button onClick={() => onEdit(question)}>編集</button><button className="danger-link" onClick={() => onDelete(question)}>削除</button></div></article>; })}</div>}
+      <div className="question-list">{visibleQuestions.map((question) => { const stat = statsByQuestion.get(question.id); const selected = selectedIds.includes(question.id); return <article className={selected ? "question-row selected" : "question-row"} key={question.id}><button type="button" className={selected ? "question-selector selected" : "question-selector"} aria-label={`${question.prompt}を${selected ? "選択解除" : "選択"}`} aria-pressed={selected} onClick={() => toggleQuestion(question.id)}>{selected ? "✓" : ""}</button><div className="answer-type">{question.answerType === "boolean" ? "○×" : question.answerType === "letters" ? "4択" : question.answerType === "multiple-choice" ? `${question.choices?.length ?? 0}択` : "入力"}</div><div className="question-copy"><div><span>{categoryName(question.categoryId)}</span><small>{answerLabels[question.answerType]}</small></div><h3 title={question.prompt}>{truncateQuestionPrompt(question.prompt)}</h3><p>答え：{question.displayAnswer || question.answer}{question.answerType === "letters" && question.displayAnswer !== question.answer ? `（入力：${question.answer}）` : ""}</p></div><div className="question-stat">{stat ? <><strong>{Math.round(stat.correct / stat.total * 100)}%</strong><small>{stat.total}回答</small></> : <small>未回答</small>}</div><div className="row-actions"><button onClick={() => onEdit(question)}>編集</button><button className="danger-link" onClick={() => onDelete(question)}>削除</button></div></article>; })}</div>}
+    {selectedIds.length > 0 && <><div className="bulk-action-bar" role="toolbar" aria-label="選択した問題の操作"><strong>{selectedIds.length}問選択中</strong><button type="button" onClick={() => setChangingCategory((current) => !current)}>カテゴリ変更</button><button type="button" className="bulk-clear" onClick={() => { setSelectedIds([]); setChangingCategory(false); }}>選択クリア</button><button type="button" className="bulk-delete" onClick={() => void deleteSelectedQuestions()}>削除</button></div>{changingCategory && <div className="bulk-category-panel"><label>変更先<select value={bulkCategoryId} onChange={(event) => setBulkCategoryId(event.target.value)}><option value="uncategorized">カテゴリなし</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label><button type="button" className="button ghost-button" onClick={() => setChangingCategory(false)}>キャンセル</button><button type="button" className="button primary-button" onClick={() => void changeSelectedCategory()}>変更する</button></div>}</>}
   </section>;
 }
 
@@ -352,7 +372,7 @@ function QuestionForm({ categories, question, onCancel, onSaved }: { categories:
 }
 
 function StudySetup({ questions, categories, attempts, timeLimitOptions, onUpdateTimeLimits, onCancel, onStart }: { questions: Question[]; categories: Category[]; attempts: Attempt[]; timeLimitOptions: number[]; onUpdateTimeLimits: (options: number[]) => void; onCancel: () => void; onStart: (q: Question[], seconds: number) => void }) {
-  const [categoryId, setCategoryId] = useState("all"); const [count, setCount] = useState(Math.max(1, questions.length)); const [limit, setLimit] = useState(0); const [filter, setFilter] = useState<Filter>("all"); const [newLimit, setNewLimit] = useState("");
+  const [categoryId, setCategoryId] = useState("all"); const [count, setCount] = useState(Math.max(1, questions.length)); const [countInput, setCountInput] = useState(String(Math.max(1, questions.length))); const [limit, setLimit] = useState(0); const [filter, setFilter] = useState<Filter>("all"); const [newLimit, setNewLimit] = useState("");
   const available = useMemo(() => questions.filter((q) => categoryId === "all" || q.categoryId === categoryId).filter((q) => {
     const own = attempts.filter((a) => a.questionId === q.id); const last = own[0];
     if (filter === "last-wrong") return !!last && !last.correct;
@@ -361,10 +381,11 @@ function StudySetup({ questions, categories, attempts, timeLimitOptions, onUpdat
     if (filter === "weak") return own.length > 0 && own.filter((a) => a.correct).length / own.length < .6;
     return true;
   }), [attempts, categoryId, filter, questions]);
+  const sliderProgress = available.length <= 1 ? 100 : (Math.min(count, available.length) - 1) / (available.length - 1) * 100;
   return <section className="page setup-page"><button className="back-link" onClick={onCancel}>← ホームに戻る</button><div className="form-heading"><p className="eyebrow">STUDY SETUP</p><h1>どんなふうに解きますか？</h1><p>今日の気分に合わせて、出題内容を選びましょう。</p></div>
-    <div className="setup-card"><label>カテゴリ<select value={categoryId} onChange={(e) => { setCategoryId(e.target.value); setCount(Math.max(1, questions.filter((question) => e.target.value === "all" || question.categoryId === e.target.value).length)); }}><option value="all">すべてのカテゴリ</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-      <fieldset><legend>出題範囲</legend><div className="segmented">{([['all','すべて'],['last-wrong','前回不正解'],['ever-wrong','不正解あり'],['unanswered','未回答'],['weak','苦手']] as [Filter,string][]).map(([value, label]) => <button type="button" key={value} className={filter === value ? "active" : ""} onClick={() => { setFilter(value); setCount(Math.max(1, questions.filter((question) => categoryId === "all" || question.categoryId === categoryId).filter((question) => { const own = attempts.filter((attempt) => attempt.questionId === question.id); const last = own[0]; if (value === "last-wrong") return !!last && !last.correct; if (value === "ever-wrong") return own.some((attempt) => !attempt.correct); if (value === "unanswered") return own.length === 0; if (value === "weak") return own.length > 0 && own.filter((attempt) => attempt.correct).length / own.length < .6; return true; }).length)); }}>{label}</button>)}</div></fieldset>
-      <fieldset><legend>出題数 <b className="range-value">{available.length ? Math.min(count, available.length) : 0}問</b></legend><div className="range-control"><input aria-label="出題数" type="range" min={available.length === 1 ? 0 : 1} max={Math.max(1, available.length)} value={available.length === 1 ? 1 : Math.min(count, Math.max(1, available.length))} disabled={available.length <= 1} onChange={(e) => setCount(Number(e.target.value))} /><div><span>1問</span><span>全{available.length}問</span></div></div></fieldset>
+    <div className="setup-card"><label>カテゴリ<select value={categoryId} onChange={(e) => { const nextCount = Math.max(1, questions.filter((question) => e.target.value === "all" || question.categoryId === e.target.value).length); setCategoryId(e.target.value); setCount(nextCount); setCountInput(String(nextCount)); }}><option value="all">すべてのカテゴリ</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+      <fieldset><legend>出題範囲</legend><div className="segmented">{([['all','すべて'],['last-wrong','前回不正解'],['ever-wrong','不正解あり'],['unanswered','未回答'],['weak','苦手']] as [Filter,string][]).map(([value, label]) => <button type="button" key={value} className={filter === value ? "active" : ""} onClick={() => { const nextCount = Math.max(1, questions.filter((question) => categoryId === "all" || question.categoryId === categoryId).filter((question) => { const own = attempts.filter((attempt) => attempt.questionId === question.id); const last = own[0]; if (value === "last-wrong") return !!last && !last.correct; if (value === "ever-wrong") return own.some((attempt) => !attempt.correct); if (value === "unanswered") return own.length === 0; if (value === "weak") return own.length > 0 && own.filter((attempt) => attempt.correct).length / own.length < .6; return true; }).length); setFilter(value); setCount(nextCount); setCountInput(String(nextCount)); }}>{label}</button>)}</div></fieldset>
+      <fieldset><legend>出題数</legend><label className="count-entry"><input aria-label="出題数を直接入力" type="number" inputMode="numeric" min={1} max={Math.max(1, available.length)} step={1} value={available.length ? countInput : "0"} disabled={!available.length} onFocus={() => setCountInput("")} onBlur={() => setCountInput(String(Math.min(count, Math.max(1, available.length))))} onChange={(event) => { const rawValue = event.target.value; setCountInput(rawValue); if (!rawValue) return; const value = Number(rawValue); if (!Number.isFinite(value)) return; const nextCount = Math.min(Math.max(1, Math.trunc(value)), Math.max(1, available.length)); setCount(nextCount); if (nextCount !== value) setCountInput(String(nextCount)); }} /><span>問</span><small>数字をタップして直接入力できます</small></label><div className="range-control"><input aria-label="出題数スライダー" type="range" min={available.length === 1 ? 0 : 1} max={Math.max(1, available.length)} value={available.length === 1 ? 1 : Math.min(count, Math.max(1, available.length))} disabled={available.length <= 1} style={{ "--range-progress": `${sliderProgress}%` } as CSSProperties} onChange={(e) => { const nextCount = Number(e.target.value); setCount(nextCount); setCountInput(String(nextCount)); }} /><div><span>1問</span><span>全{available.length}問</span></div></div></fieldset>
       <fieldset><legend>1問の制限時間</legend>{limit === 0 && <p className="field-help">選択されていないため、制限時間なしです。</p>}<div className="time-limit-manager">{timeLimitOptions.map((seconds) => <div className={limit === seconds ? "time-limit-option active" : "time-limit-option"} key={seconds}><button type="button" onClick={() => setLimit(limit === seconds ? 0 : seconds)}>{seconds}秒</button><button type="button" className="remove-time" aria-label={`${seconds}秒を削除`} onClick={() => { if (limit === seconds) setLimit(0); onUpdateTimeLimits(timeLimitOptions.filter((value) => value !== seconds)); }}>×</button></div>)}</div><form className="add-time-form" onSubmit={(event) => { event.preventDefault(); const seconds = Number(newLimit); if (!Number.isInteger(seconds) || seconds < 1 || seconds > 3600 || timeLimitOptions.includes(seconds)) return; onUpdateTimeLimits([...timeLimitOptions, seconds]); setLimit(seconds); setNewLimit(""); }}><label>時間を追加<input type="number" min="1" max="3600" step="1" value={newLimit} onChange={(event) => setNewLimit(event.target.value)} placeholder="例：45" /><span>秒</span></label><button type="submit" disabled={!newLimit || timeLimitOptions.includes(Number(newLimit))}>＋ 追加</button></form><small className="field-help">1〜3600秒で追加できます。</small></fieldset>
       <div className="setup-summary"><span>{available.length ? Math.min(count, available.length) : 0}</span><p>問を出題します<br /><small>条件に合う全{available.length}問からランダムです</small></p><button className="button primary-button" disabled={!available.length} onClick={() => onStart(shuffle(available).slice(0, count), limit)}>学習を始める →</button></div>
     </div></section>;
@@ -398,7 +419,7 @@ function History({ attempts, sessions, questions, onEdit }: { attempts: Attempt[
   const questionName = (id: string) => questions.find((q) => q.id === id)?.prompt ?? "削除済みの問題";
   const questionLink = (id: string) => {
     const question = questions.find((item) => item.id === id);
-    return question ? <button className="history-question-link" onClick={() => onEdit(question)}><span>{question.prompt}</span><small>編集 →</small></button> : <h3>{questionName(id)}</h3>;
+    return question ? <button className="history-question-link" onClick={() => onEdit(question)}><span title={question.prompt}>{truncateQuestionPrompt(question.prompt)}</span><small>編集 →</small></button> : <h3>{questionName(id)}</h3>;
   };
   const totalCorrect = attempts.filter((a) => a.correct).length;
   const dailyGroups = useMemo(() => {
